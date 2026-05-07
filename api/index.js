@@ -3,11 +3,22 @@ const RSSParser = require('rss-parser');
 const cors = require('cors');
 
 const app = express();
-const parser = new RSSParser();
+// إضافة إعدادات مخصصة لـ Parser ليدعم وسوم الصور المختلفة
+const parser = new RSSParser({
+    customFields: {
+        item: [
+            ['media:content', 'mediaContent', {keepArray: false}],
+            ['content:encoded', 'contentEncoded']
+        ]
+    }
+});
 
 app.use(cors());
 
 app.get('/', async (req, res) => {
+    // كود تسريع التحميل من Vercel (يخزن النسخة لمدة دقيقة ويحدثها في الخلفية)
+    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=30');
+
     const SOURCES = [
         { name: "سعودي جيمر", url: "https://www.saudigamer.com/feed/" },
         { name: "ترو جيمنج", url: "https://www.truegaming.net/home/feed/" },
@@ -20,18 +31,27 @@ app.get('/', async (req, res) => {
         let feedPromises = SOURCES.map(async (source) => {
             try {
                 const feed = await parser.parseURL(source.url);
-                return feed.items.map(item => {
-                    // محاولة استخراج أول صورة من محتوى الخبر إذا لم تكن موجودة في الوسوم الرسمية
-                    let imgRegex = /<img[^>]+src="([^">]+)"/;
-                    let match = imgRegex.exec(item.content || item['content:encoded'] || "");
-                    let imageUrl = item.enclosure?.url || (match ? match[1] : 'https://via.placeholder.com/400x200?text=No+Image');
+                return feed.items.slice(0, 10).map(item => {
+                    // محرك ذكي لاستخراج الصورة
+                    let imageUrl = 'https://via.placeholder.com/400x200?text=No+Image';
+                    
+                    if (item.mediaContent && item.mediaContent.$ && item.mediaContent.$.url) {
+                        imageUrl = item.mediaContent.$.url;
+                    } else if (item.enclosure && item.enclosure.url) {
+                        imageUrl = item.enclosure.url;
+                    } else {
+                        // البحث عن أول صورة داخل المحتوى المشفر (سعودي جيمر يستخدم هذا غالباً)
+                        const imgRegex = /<img[^>]+src="([^">]+)"/;
+                        const match = imgRegex.exec(item.contentEncoded || item.content || "");
+                        if (match) imageUrl = match[1];
+                    }
 
                     return {
                         title: item.title,
                         link: item.link,
                         pubDate: item.pubDate,
                         sourceName: source.name,
-                        description: item.contentSnippet ? item.contentSnippet.substring(0, 150) + "..." : "لا يوجد وصف مختصر...",
+                        description: item.contentSnippet ? item.contentSnippet.substring(0, 120) + "..." : "تحديث جديد في عالم الألعاب...",
                         image: imageUrl
                     };
                 });
@@ -50,35 +70,36 @@ app.get('/', async (req, res) => {
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>أخبار ألعاب الفيديو 2</title>
             <style>
-                body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: #0f0f0f; color: #fff; margin: 0; padding: 10px; }
-                .container { max-width: 600px; margin: auto; }
-                header { text-align: center; padding: 20px 0; background: linear-gradient(45deg, #007bff, #00c6ff); border-radius: 15px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,123,255,0.3); }
-                h1 { margin: 0; font-size: 24px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
-                .card { background: #1a1a1a; border-radius: 12px; overflow: hidden; margin-bottom: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.5); border: 1px solid #333; }
-                .card img { width: 100%; height: 220px; object-fit: cover; }
+                body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: #050505; color: #fff; margin: 0; padding: 10px; }
+                .container { max-width: 500px; margin: auto; }
+                header { text-align: center; padding: 15px; background: #1a1a1a; border-radius: 10px; margin-bottom: 20px; border: 1px solid #007bff; }
+                .card { background: #111; border-radius: 15px; overflow: hidden; margin-bottom: 25px; border: 1px solid #222; }
+                .img-container { width: 100%; height: 200px; background: #222; position: relative; }
+                .card img { width: 100%; height: 100%; object-fit: cover; }
+                .source-tag { position: absolute; top: 10px; right: 10px; background: rgba(0, 123, 255, 0.9); padding: 4px 10px; border-radius: 5px; font-size: 11px; font-weight: bold; }
                 .content { padding: 15px; }
-                .source-tag { background: #007bff; color: white; padding: 3px 10px; border-radius: 5px; font-size: 12px; font-weight: bold; }
-                .card h3 { margin: 10px 0; font-size: 18px; line-height: 1.4; color: #fff; }
-                .card p { font-size: 14px; color: #bbb; line-height: 1.6; margin-bottom: 15px; }
-                .card-footer { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #333; padding-top: 10px; }
-                .btn { background: #333; color: #00c6ff; padding: 8px 15px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 13px; transition: 0.3s; }
-                .btn:hover { background: #007bff; color: #fff; }
-                .date { font-size: 11px; color: #666; }
+                .card h3 { margin: 0; font-size: 17px; color: #fff; line-height: 1.5; }
+                .card p { font-size: 13px; color: #888; margin-top: 10px; }
+                .card-footer { margin-top: 15px; display: flex; justify-content: space-between; align-items: center; }
+                .btn { color: #00c6ff; text-decoration: none; font-size: 14px; font-weight: bold; }
+                .date { font-size: 10px; color: #555; }
             </style>
         </head>
         <body>
             <div class="container">
-                <header><h1>🎮 أخبار ألعاب الفيديو 2</h1></header>
+                <header><h1>🎮 أخبار الألعاب 2</h1></header>
                 ${combinedNews.map(item => `
                     <div class="card">
-                        <img src="${item.image}" alt="خبر">
-                        <div class="content">
+                        <div class="img-container">
                             <span class="source-tag">${item.sourceName}</span>
+                            <img src="${item.image}" loading="lazy" onerror="this.src='https://via.placeholder.com/400x200?text=News+Image'">
+                        </div>
+                        <div class="content">
                             <h3>${item.title}</h3>
                             <p>${item.description}</p>
                             <div class="card-footer">
-                                <span class="date">${new Date(item.pubDate).toLocaleDateString('ar-EG', { day:'numeric', month:'long' })}</span>
-                                <a href="${item.link}" target="_blank" class="btn">عرض الخبر</a>
+                                <span class="date">${new Date(item.pubDate).toLocaleDateString('ar-EG')}</span>
+                                <a href="${item.link}" target="_blank" class="btn">إقرأ المزيد ←</a>
                             </div>
                         </div>
                     </div>
@@ -90,7 +111,7 @@ app.get('/', async (req, res) => {
         res.send(htmlContent);
 
     } catch (error) {
-        res.status(500).send("خطأ في جلب البيانات");
+        res.status(500).send("عذراً، حدث خطأ في النظام");
     }
 });
 
